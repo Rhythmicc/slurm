@@ -9,7 +9,6 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.8"
 qpro = "^0.12.8"
-quickstart-rhy = "^0.7.3"
 
 [tool.poetry.scripts]
 slurm = "slurm.main:main"

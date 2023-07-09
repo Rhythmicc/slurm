@@ -3,19 +3,11 @@
 ## Install
 
 ```shell
-pip3 install slurm -U
+pip3 install git+https://github.com/Rhythmicc/slurm.git -U
 ```
 
 ## Usage
 
 ```shell
-slurm --help
+slurm # show help
 ```
-
-## Developer
-
-If you need use global config, just edit `__config__.py`:
-
-1. make `enable_config = True`.
-2. edit `questions` list.
-3. using `config` at `main.py`.

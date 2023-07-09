@@ -3,6 +3,15 @@ from . import *
 
 app = Commander(executable_name)
 
+def store_last_id(job_id):
+    with open('.last_id', 'w') as f:
+        f.write(job_id)
+
+def get_last_id():
+    if not os.path.exists('.last_id'):
+        return None
+    with open('.last_id', 'r') as f:
+        return f.read().strip()
 
 @app.command()
 def view(log_path: str):
@@ -63,7 +72,7 @@ def get_job_id(command_output: str):
 
 
 @app.command()
-def view_log(job_id: str, show_status: bool = False):
+def view_log(job_id: str = get_last_id(), show_status: bool = False):
     """
     查看日志
 
@@ -114,22 +123,31 @@ def view_log(job_id: str, show_status: bool = False):
         QproDefaultConsole.print(QproInfoString, "任务已结束！")
         proc.kill()
     
-    def output_error_printer(proc, output, error, live = None, layout = None):
+    def output_error_printer(proc, output, error, live = None, layout: Layout = None):
         if live:
-            history = ''
+            layout_height = int(QproDefaultConsole.height * 4 / 5)
+            history = [] # only save height num lines
             while proc.poll() is None:
                 if not output.empty():
-                    history += output.get().decode("utf-8")
+                    history.append(output.get().decode("utf-8").strip())
+                    if len(history) > layout_height:
+                        history.pop(0)
                 if not error.empty():
-                    history += error.get().decode("utf-8")
+                    history.append(error.get().decode("utf-8").strip())
+                    if len(history) > layout_height:
+                        history.pop(0)
                 layout['output'].update(history)
                 live.refresh()
             while not output.empty() or not error.empty():
                 if not output.empty():
-                    history += output.get().decode("utf-8")
+                    history.append(output.get().decode("utf-8").strip())
+                    if len(history) > layout_height:
+                        history.pop(0)
                 if not error.empty():
-                    history += error.get().decode("utf-8")
-                layout['output'].update(history)
+                    history.append(error.get().decode("utf-8").strip())
+                    if len(history) > layout_height:
+                        history.pop(0)
+                layout['output'].update('\n'.join(history[-layout_height:]))
                 live.refresh()
         else:
             while proc.poll() is None:

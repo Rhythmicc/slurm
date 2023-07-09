@@ -3,28 +3,21 @@ from . import *
 
 app = Commander(executable_name)
 
+
 def store_last_id(job_id):
-    with open('.last_id', 'w') as f:
+    with open(".last_id", "w") as f:
         f.write(job_id)
 
+
 def get_last_id():
-    if not os.path.exists('.last_id'):
+    if not os.path.exists(".last_id"):
         return None
-    with open('.last_id', 'r') as f:
+    with open(".last_id", "r") as f:
         return f.read().strip()
 
-@app.command()
-def view(log_path: str):
-    """
-    查看任务日志
-
-    :param log_path: 日志路径
-    """
-    external_exec("tail -f {}".format(log_path))
-
 
 @app.command()
-def cancel(job_id: str):
+def cancel(job_id: str = get_last_id()):
     """
     取消任务
 
@@ -46,8 +39,9 @@ def template(name: str):
 #!/bin/bash
 #SBATCH -J {name}
 #SBATCH -p v6_384
-#SBATCH -n 1
-#SBATCH -c 1
+#SBATCH -N 1           # 节点
+#SBATCH -n 1           # 进程
+#SBATCH -c 1           # 线程
 #SBATCH -o log/%j.log
 #SBATCH -e log/%j.err
 
@@ -72,7 +66,7 @@ def get_job_id(command_output: str):
 
 
 @app.command()
-def view_log(job_id: str = get_last_id(), show_status: bool = False):
+def view(job_id: str = get_last_id(), show_status: bool = False):
     """
     查看日志
 
@@ -85,7 +79,7 @@ def view_log(job_id: str = get_last_id(), show_status: bool = False):
     from threading import Thread
     from queue import Queue
     import time
-    
+
     def my_print(line):
         line = line.strip()
         if line.startswith("__START__"):
@@ -109,12 +103,12 @@ def view_log(job_id: str = get_last_id(), show_status: bool = False):
             error.put(line)
         proc.stderr.close()
 
-    def _monitor_job_running(proc, job_id, info_stream = None):
+    def _monitor_job_running(proc, job_id, info_stream=None):
         while True:
             st, ct = external_exec(f"squeue -j {job_id}", without_output=True)
             if st:
                 break
-            job_info = ct.split('\n')[1]
+            job_info = ct.split("\n")[1]
             if not job_info:
                 break
             if info_stream:
@@ -122,32 +116,32 @@ def view_log(job_id: str = get_last_id(), show_status: bool = False):
             time.sleep(1)
         QproDefaultConsole.print(QproInfoString, "任务已结束！")
         proc.kill()
-    
-    def output_error_printer(proc, output, error, live = None, layout: Layout = None):
+
+    def output_error_printer(proc, output, error, live=None, layout=None):
         if live:
             layout_height = int(QproDefaultConsole.height * 4 / 5)
-            history = [] # only save height num lines
+            history = []  # only save height num lines
             while proc.poll() is None:
                 if not output.empty():
-                    history.append(output.get().decode("utf-8").strip())
+                    history.append(output.get().decode("utf-8").rstrip())
                     if len(history) > layout_height:
                         history.pop(0)
                 if not error.empty():
-                    history.append(error.get().decode("utf-8").strip())
+                    history.append(error.get().decode("utf-8").rstrip())
                     if len(history) > layout_height:
                         history.pop(0)
-                layout['output'].update(history)
+                layout["output"].update("\n".join(history[-layout_height:]))
                 live.refresh()
             while not output.empty() or not error.empty():
                 if not output.empty():
-                    history.append(output.get().decode("utf-8").strip())
+                    history.append(output.get().decode("utf-8").rstrip())
                     if len(history) > layout_height:
                         history.pop(0)
                 if not error.empty():
-                    history.append(error.get().decode("utf-8").strip())
+                    history.append(error.get().decode("utf-8").rstrip())
                     if len(history) > layout_height:
                         history.pop(0)
-                layout['output'].update('\n'.join(history[-layout_height:]))
+                layout["output"].update("\n".join(history[-layout_height:]))
                 live.refresh()
         else:
             while proc.poll() is None:
@@ -161,7 +155,7 @@ def view_log(job_id: str = get_last_id(), show_status: bool = False):
                 if not error.empty():
                     my_print(error.get().decode("utf-8"))
 
-    log_path = f'log/{job_id}.log'
+    log_path = f"log/{job_id}.log"
     output = Queue()
     error = Queue()
     squeue_info = Queue()
@@ -190,7 +184,8 @@ def view_log(job_id: str = get_last_id(), show_status: bool = False):
                     continue
                 qinfo = info_stream.get()
                 table = qs_default_table(
-                    ["任务ID", "任务队列", "任务名称", "用户", "状态", "用时", "节点数目", "节点列表"], title="任务队列\n"
+                    ["任务ID", "任务队列", "任务名称", "用户", "状态", "用时", "节点数目", "节点列表"],
+                    title="任务队列\n",
                 )
                 table.add_row(*qinfo.strip().split())
                 layout["squeue"].update(Align.center(table))
@@ -198,13 +193,23 @@ def view_log(job_id: str = get_last_id(), show_status: bool = False):
 
         Thread(target=squeue_generator, args=(layout, proc, squeue_info)).start()
 
-        with Live(layout, console=QproDefaultConsole, auto_refresh=False, screen=True) as live:
+        with Live(
+            layout, console=QproDefaultConsole, auto_refresh=False, screen=True
+        ) as live:
             output_error_printer(proc, output, error, live, layout)
     else:
         Thread(target=_monitor_job_running, args=(proc, job_id)).start()
         output_error_printer(proc, output, error)
-    
+
     QproDefaultConsole.print(QproInfoString, f"任务已结束，日志文件: {log_path}")
+
+
+@app.command()
+def error(job_id: str = get_last_id()):
+    """
+    查看错误信息
+    """
+    QproDefaultConsole.print(f"log/{job_id}.err")
 
 
 @app.command()
@@ -219,11 +224,12 @@ def submit(script_path: str):
     _, ct = external_exec("sbatch {}".format(script_path), without_output=True)
     job_id = get_job_id(ct)
     QproDefaultConsole.print(QproInfoString, f"任务已提交，任务ID: {job_id}")
+    store_last_id(job_id)
     QproDefaultStatus("正在等待日志文件生成...").start()
     while not os.path.exists(f"log/{job_id}.log"):
         time.sleep(0.1)
     QproDefaultStatus.stop()
-    app.real_call('view_log', job_id, True)
+    app.real_call("view", job_id, True)
 
 
 @app.command()

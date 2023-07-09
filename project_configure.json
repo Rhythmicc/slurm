@@ -1,0 +1,16 @@
+{
+ "build": "",
+ "entry_point": "slurm/main.py",
+ "executable": "python3 -m slurm.main",
+ "input_file": "",
+ "template_root": "",
+ "server_targets": [
+  {
+   "user": "",
+   "host": "",
+   "port": 22,
+   "path": ""
+  }
+ ],
+ "enable_complete": true
+}

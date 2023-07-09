@@ -17,16 +17,6 @@ def get_last_id():
 
 
 @app.command()
-def cancel(job_id: str = get_last_id()):
-    """
-    取消任务
-
-    :param job_id: 任务ID
-    """
-    external_exec("scancel {}".format(job_id))
-
-
-@app.command()
 def template(name: str):
     """
     生成sbatch模板
@@ -63,6 +53,36 @@ def get_job_id(command_output: str):
     :return: job_id
     """
     return command_output.split()[-1].strip()
+
+
+@app.command()
+def submit(script_path: str):
+    """
+    提交任务并查看日志
+
+    :param script_path: 脚本路径
+    """
+    import time
+
+    _, ct = external_exec("sbatch {}".format(script_path), without_output=True)
+    job_id = get_job_id(ct)
+    QproDefaultConsole.print(QproInfoString, f"任务已提交，任务ID: {job_id}")
+    store_last_id(job_id)
+    QproDefaultStatus("正在等待日志文件生成...").start()
+    while not os.path.exists(f"log/{job_id}.log"):
+        time.sleep(0.1)
+    QproDefaultStatus.stop()
+    app.real_call("view", job_id, True)
+
+
+@app.command()
+def cancel(job_id: str = get_last_id()):
+    """
+    取消任务
+
+    :param job_id: 任务ID
+    """
+    external_exec("scancel {}".format(job_id))
 
 
 @app.command()
@@ -210,26 +230,6 @@ def error(job_id: str = get_last_id()):
     查看错误信息
     """
     QproDefaultConsole.print(f"log/{job_id}.err")
-
-
-@app.command()
-def submit(script_path: str):
-    """
-    提交任务并查看日志
-
-    :param script_path: 脚本路径
-    """
-    import time
-
-    _, ct = external_exec("sbatch {}".format(script_path), without_output=True)
-    job_id = get_job_id(ct)
-    QproDefaultConsole.print(QproInfoString, f"任务已提交，任务ID: {job_id}")
-    store_last_id(job_id)
-    QproDefaultStatus("正在等待日志文件生成...").start()
-    while not os.path.exists(f"log/{job_id}.log"):
-        time.sleep(0.1)
-    QproDefaultStatus.stop()
-    app.real_call("view", job_id, True)
 
 
 @app.command()

@@ -11,7 +11,7 @@ def view(log_path: str):
 
     :param log_path: 日志路径
     """
-    external_exec('tail -f {}'.format(log_path))
+    external_exec("tail -f {}".format(log_path))
 
 
 @app.command()
@@ -21,7 +21,7 @@ def cancel(job_id: str):
 
     :param job_id: 任务ID
     """
-    external_exec('scancel {}'.format(job_id))
+    external_exec("scancel {}".format(job_id))
 
 
 @app.command()
@@ -31,8 +31,9 @@ def template(name: str):
 
     :param name: 任务名称
     """
-    with open(f'{name}.sbatch', 'w') as f:
-        print(f"""\
+    with open(f"{name}.sbatch", "w") as f:
+        print(
+            f"""\
 #!/bin/bash
 #SBATCH -J {name}
 #SBATCH -p v6_384
@@ -41,10 +42,15 @@ def template(name: str):
 #SBATCH -o log/%j.log
 #SBATCH -e log/%j.err
 
-# your commands here!""", file=f)
-    QproDefaultConsole.print(QproInfoString, f'已生成模板文件: "{name}.sbatch"，请勿修改`-o` `-e`参数！')
-    if not os.path.exists('log') or not os.path.isdir('log'):
-        os.mkdir('log')
+# your commands here!""",
+            file=f,
+        )
+    QproDefaultConsole.print(
+        QproInfoString, f'已生成模板文件: "{name}.sbatch"，请勿修改`-o` `-e`参数！'
+    )
+    if not os.path.exists("log") or not os.path.isdir("log"):
+        os.mkdir("log")
+
 
 def get_job_id(command_output: str):
     """
@@ -55,18 +61,22 @@ def get_job_id(command_output: str):
     """
     return command_output.split()[-1].strip()
 
-def view_log(log_path: str, job_id: str):
+
+@app.command()
+def view_log(job_id: str, show_status: bool = False):
     """
     查看日志
 
-    :param log_path: 日志路径
     :param job_id: 任务ID
+    :param show_status: 是否显示任务状态
     """
     # 实时显示日志，并在任务结束后退出
     from rich.markdown import Markdown
     from subprocess import Popen, PIPE
     from threading import Thread
-
+    from queue import Queue
+    import time
+    
     def my_print(line):
         line = line.strip()
         if line.startswith("__START__"):
@@ -81,42 +91,102 @@ def view_log(log_path: str, job_id: str):
             QproDefaultConsole.print(line)
 
     def _output_reader(proc, output):
-        for line in iter(proc.stdout.readline, b''):
-            output.append(line)
+        for line in iter(proc.stdout.readline, b""):
+            output.put(line)
         proc.stdout.close()
 
     def _error_reader(proc, error):
-        for line in iter(proc.stderr.readline, b''):
-            error.append(line)
+        for line in iter(proc.stderr.readline, b""):
+            error.put(line)
         proc.stderr.close()
-    
-    def _monitor_job_running(proc, job_id):
-        import time
+
+    def _monitor_job_running(proc, job_id, info_stream = None):
         while True:
-            _, ct = external_exec(f'squeue -j {job_id}', without_output=True)
-            if not ct.split('\n')[1:]:
+            st, ct = external_exec(f"squeue -j {job_id}", without_output=True)
+            if st:
                 break
+            job_info = ct.split('\n')[1]
+            if not job_info:
+                break
+            if info_stream:
+                info_stream.put(job_info)
             time.sleep(1)
+        QproDefaultConsole.print(QproInfoString, "任务已结束！")
         proc.kill()
     
-    output = []
-    error = []
-    proc = Popen(['tail', '-f', log_path], stdout=PIPE, stderr=PIPE)
+    def output_error_printer(proc, output, error, live = None, layout = None):
+        if live:
+            history = ''
+            while proc.poll() is None:
+                if not output.empty():
+                    history += output.get().decode("utf-8")
+                if not error.empty():
+                    history += error.get().decode("utf-8")
+                layout['output'].update(history)
+                live.refresh()
+            while not output.empty() or not error.empty():
+                if not output.empty():
+                    history += output.get().decode("utf-8")
+                if not error.empty():
+                    history += error.get().decode("utf-8")
+                layout['output'].update(history)
+                live.refresh()
+        else:
+            while proc.poll() is None:
+                if not output.empty():
+                    my_print(output.get().decode("utf-8"))
+                if not error.empty():
+                    my_print(error.get().decode("utf-8"))
+            while not output.empty() or not error.empty():
+                if not output.empty():
+                    my_print(output.get().decode("utf-8"))
+                if not error.empty():
+                    my_print(error.get().decode("utf-8"))
+
+    log_path = f'log/{job_id}.log'
+    output = Queue()
+    error = Queue()
+    squeue_info = Queue()
+    proc = Popen(["tail", "-f", log_path], stdout=PIPE, stderr=PIPE)
     Thread(target=_output_reader, args=(proc, output)).start()
     Thread(target=_error_reader, args=(proc, error)).start()
-    Thread(target=_monitor_job_running, args=(proc, job_id)).start()
-    while proc.poll() is None:
-        if output:
-            my_print(output.pop().decode('utf-8'))
-        if error:
-            my_print(error.pop().decode('utf-8'))
+    if show_status:
+        Thread(target=_monitor_job_running, args=(proc, job_id, squeue_info)).start()
+
+        import time
+        from rich.layout import Layout
+        from rich.live import Live
+        from rich.align import Align
+        from QuickStart_Rhy.TuiTools.Table import qs_default_table
+
+        layout = Layout()
+        layout.split_column(
+            Layout(name="squeue", ratio=1, minimum_size=5),
+            Layout(name="output", ratio=4, minimum_size=10),
+        )
+
+        def squeue_generator(layout, proc, info_stream):
+            while proc.poll() is None:
+                if info_stream.empty():
+                    time.sleep(1)
+                    continue
+                qinfo = info_stream.get()
+                table = qs_default_table(
+                    ["任务ID", "任务队列", "任务名称", "用户", "状态", "用时", "节点数目", "节点列表"], title="任务队列\n"
+                )
+                table.add_row(*qinfo.strip().split())
+                layout["squeue"].update(Align.center(table))
+                time.sleep(1)
+
+        Thread(target=squeue_generator, args=(layout, proc, squeue_info)).start()
+
+        with Live(layout, console=QproDefaultConsole, auto_refresh=False, screen=True) as live:
+            output_error_printer(proc, output, error, live, layout)
+    else:
+        Thread(target=_monitor_job_running, args=(proc, job_id)).start()
+        output_error_printer(proc, output, error)
     
-    # 任务结束后，显示最后的日志
-    while output:
-        my_print(output.pop().decode('utf-8'))
-    while error:
-        my_print(error.pop().decode('utf-8'))
-    QproDefaultConsole.print(QproInfoString, f'任务已结束，日志文件: {log_path}')
+    QproDefaultConsole.print(QproInfoString, f"任务已结束，日志文件: {log_path}")
 
 
 @app.command()
@@ -128,14 +198,14 @@ def submit(script_path: str):
     """
     import time
 
-    _, ct = external_exec('sbatch {}'.format(script_path), without_output=True)
+    _, ct = external_exec("sbatch {}".format(script_path), without_output=True)
     job_id = get_job_id(ct)
-    QproDefaultConsole.print(QproInfoString, f'任务已提交，任务ID: {job_id}')
-    QproDefaultStatus('正在等待日志文件生成...').start()
-    while not os.path.exists(f'log/{job_id}.log'):
+    QproDefaultConsole.print(QproInfoString, f"任务已提交，任务ID: {job_id}")
+    QproDefaultStatus("正在等待日志文件生成...").start()
+    while not os.path.exists(f"log/{job_id}.log"):
         time.sleep(0.1)
     QproDefaultStatus.stop()
-    view_log(f'log/{job_id}.log', job_id)
+    app.real_call('view_log', job_id, True)
 
 
 @app.command()
@@ -147,15 +217,16 @@ def top():
     from rich.live import Live
     from rich.align import Align
     from QuickStart_Rhy.TuiTools.Table import qs_default_table
-    table = qs_default_table(
-        ['任务ID', '任务队列', '任务名称', '用户', '状态', '用时', '节点数目', '节点列表'], title='任务队列\n')
 
     with Live(console=QproDefaultConsole, auto_refresh=False) as live:
         while True:
-            _, ct = external_exec('squeue', without_output=True)
-            table = qs_default_table(['任务ID', '任务队列', '任务名称', '用户', '状态', '用时', '节点数目', '节点列表'], title='任务队列\n')
-            for line in ct.split('\n')[1:]:
-                if line.strip() == '':
+            _, ct = external_exec("squeue", without_output=True)
+            table = qs_default_table(
+                ["任务ID", "任务队列", "任务名称", "用户", "状态", "用时", "节点数目", "节点列表"],
+                title="任务队列\n",
+            )
+            for line in ct.split("\n")[1:]:
+                if line.strip() == "":
                     continue
                 line = line.split()
                 table.add_row(*line[:8])

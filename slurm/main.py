@@ -2,6 +2,8 @@ from QuickProject.Commander import Commander
 from . import *
 
 app = Commander(executable_name)
+ssh_session_id = os.environ.get("SSH_CONNECTION", None)
+ssh_session_id = ssh_session_id.split()[1] if ssh_session_id else 'local'
 
 
 def store_last_id(job_id):
@@ -72,7 +74,7 @@ def submit(script_path: str):
     while not os.path.exists(f"log/{job_id}.log"):
         time.sleep(0.1)
     QproDefaultStatus.stop()
-    app.real_call("view", job_id, True)
+    app.real_call("view", job_id)
 
 
 @app.command()
@@ -141,18 +143,7 @@ def view(job_id: str = get_last_id(), show_status: bool = False):
         if live:
             layout_height = int(QproDefaultConsole.height * 4 / 5)
             history = []  # only save height num lines
-            while proc.poll() is None:
-                if not output.empty():
-                    history.append(output.get().decode("utf-8").rstrip())
-                    if len(history) > layout_height:
-                        history.pop(0)
-                if not error.empty():
-                    history.append(error.get().decode("utf-8").rstrip())
-                    if len(history) > layout_height:
-                        history.pop(0)
-                layout["output"].update("\n".join(history[-layout_height:]))
-                live.refresh()
-            while not output.empty() or not error.empty():
+            while proc.poll() is None or not output.empty() or not error.empty():
                 if not output.empty():
                     history.append(output.get().decode("utf-8").rstrip())
                     if len(history) > layout_height:
@@ -164,12 +155,7 @@ def view(job_id: str = get_last_id(), show_status: bool = False):
                 layout["output"].update("\n".join(history[-layout_height:]))
                 live.refresh()
         else:
-            while proc.poll() is None:
-                if not output.empty():
-                    my_print(output.get().decode("utf-8"))
-                if not error.empty():
-                    my_print(error.get().decode("utf-8"))
-            while not output.empty() or not error.empty():
+            while proc.poll() is None or not output.empty() or not error.empty():
                 if not output.empty():
                     my_print(output.get().decode("utf-8"))
                 if not error.empty():
@@ -183,7 +169,8 @@ def view(job_id: str = get_last_id(), show_status: bool = False):
     Thread(target=_output_reader, args=(proc, output)).start()
     Thread(target=_error_reader, args=(proc, error)).start()
     if show_status:
-        Thread(target=_monitor_job_running, args=(proc, job_id, squeue_info)).start()
+        monitor = Thread(target=_monitor_job_running, args=(proc, job_id, squeue_info))
+        monitor.start()
 
         import time
         from rich.layout import Layout
@@ -191,36 +178,37 @@ def view(job_id: str = get_last_id(), show_status: bool = False):
         from rich.align import Align
         from QuickStart_Rhy.TuiTools.Table import qs_default_table
 
-        layout = Layout()
-        layout.split_column(
-            Layout(name="squeue", ratio=1, minimum_size=5),
-            Layout(name="output", ratio=4, minimum_size=10),
-        )
+        class SQueue:
+            def __init__(self):
+                self.last_msg = ''
 
-        def squeue_generator(layout, proc, info_stream):
-            while proc.poll() is None:
-                if info_stream.empty():
-                    time.sleep(1)
-                    continue
-                qinfo = info_stream.get()
+            def __rich__(self):
                 table = qs_default_table(
                     ["任务ID", "任务队列", "任务名称", "用户", "状态", "用时", "节点数目", "节点列表"],
                     title="任务队列\n",
                 )
-                table.add_row(*qinfo.strip().split())
-                layout["squeue"].update(Align.center(table))
-                time.sleep(1)
+                if not squeue_info.empty():
+                    self.last_msg = squeue_info.get()
+                table.add_row(*self.last_msg.strip().split())
+                return Align.center(table, vertical="middle")
 
-        Thread(target=squeue_generator, args=(layout, proc, squeue_info)).start()
+
+        layout = Layout()
+        layout.split_column(
+            Layout(name="squeue", size=5),
+            Layout(name="output", ratio=4, minimum_size=10),
+        )
+        layout['squeue'].update(SQueue())
 
         with Live(
-            layout, console=QproDefaultConsole, auto_refresh=False, screen=True
+            layout, console=QproDefaultConsole, refresh_per_second=1, screen=True
         ) as live:
             output_error_printer(proc, output, error, live, layout)
     else:
-        Thread(target=_monitor_job_running, args=(proc, job_id)).start()
+        monitor = Thread(target=_monitor_job_running, args=(proc, job_id))
+        monitor.start()
         output_error_printer(proc, output, error)
-
+    monitor.join()
     QproDefaultConsole.print(QproInfoString, f"任务已结束，日志文件: {log_path}")
 
 
@@ -242,7 +230,7 @@ def top():
     from rich.align import Align
     from QuickStart_Rhy.TuiTools.Table import qs_default_table
 
-    with Live(console=QproDefaultConsole, auto_refresh=False) as live:
+    with Live(console=QproDefaultConsole, auto_refresh=False, screen=True) as live:
         while True:
             _, ct = external_exec("squeue", without_output=True)
             table = qs_default_table(
@@ -254,8 +242,7 @@ def top():
                     continue
                 line = line.split()
                 table.add_row(*line[:8])
-            live.update(Align.center(table))
-            live.refresh()
+            live.update(Align.center(table, vertical="middle"), refresh=True)
             time.sleep(1)
 
 

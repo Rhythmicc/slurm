@@ -30,7 +30,7 @@ def template(name: str):
             f"""\
 #!/bin/bash
 #SBATCH -J {name}
-#SBATCH -p v6_384
+#SBATCH -p __job_queue__
 #SBATCH -N 1           # 节点
 #SBATCH -n 1           # 进程
 #SBATCH -c 1           # 线程
@@ -64,16 +64,25 @@ def submit(script_path: str):
 
     :param script_path: 脚本路径
     """
-    import time
+    
+    def is_integer(s):
+        try:
+            int(s)
+            return True
+        except ValueError:
+            return False
 
-    _, ct = external_exec("sbatch {}".format(script_path), without_output=True)
+    st, ct = external_exec("sbatch {}".format(script_path), without_output=True)
     job_id = get_job_id(ct)
+
+    if st or not is_integer(job_id):
+        from QuickProject import QproErrorString
+
+        QproDefaultConsole.print(QproErrorString, "任务提交异常，请检查SBATCH脚本！")
+        return
+
     QproDefaultConsole.print(QproInfoString, f"任务已提交，任务ID: {job_id}")
     store_last_id(job_id)
-    QproDefaultStatus("正在等待日志文件生成...").start()
-    while not os.path.exists(f"log/{job_id}.log"):
-        time.sleep(0.1)
-    QproDefaultStatus.stop()
     app.real_call("view", job_id)
 
 
@@ -103,7 +112,7 @@ def view(job_id: str = get_last_id(), show_status: bool = False):
     import time
 
     def my_print(line):
-        line = line.strip()
+        line = line.rstrip()
         if line.startswith("__START__"):
             QproDefaultStatus(line.replace("__START__", "")).start()
         elif line.startswith("__STOP__"):
@@ -112,6 +121,8 @@ def view(job_id: str = get_last_id(), show_status: bool = False):
             QproDefaultConsole.print(
                 Markdown("# " + line.replace("__SPLIT__", "").strip())
             )
+        elif line.startswith("__MARKDOWN__"):
+            QproDefaultConsole.print(Markdown(line.replace("__MARKDOWN__", "").replace('\\n', '\n').strip()), justify='center')
         else:
             QproDefaultConsole.print(line)
 
@@ -136,7 +147,6 @@ def view(job_id: str = get_last_id(), show_status: bool = False):
             if info_stream:
                 info_stream.put(job_info)
             time.sleep(1)
-        QproDefaultConsole.print(QproInfoString, "任务已结束！")
         proc.kill()
 
     def output_error_printer(proc, output, error, live=None, layout=None):
@@ -162,6 +172,12 @@ def view(job_id: str = get_last_id(), show_status: bool = False):
                     my_print(error.get().decode("utf-8"))
 
     log_path = f"log/{job_id}.log"
+
+    QproDefaultStatus("正在等待日志文件生成...").start()
+    while not os.path.exists(log_path):
+        time.sleep(1)
+    QproDefaultStatus.stop()
+
     output = Queue()
     error = Queue()
     squeue_info = Queue()
@@ -209,6 +225,7 @@ def view(job_id: str = get_last_id(), show_status: bool = False):
         monitor.start()
         output_error_printer(proc, output, error)
     monitor.join()
+    QproDefaultStatus.stop()
     QproDefaultConsole.print(QproInfoString, f"任务已结束，日志文件: {log_path}")
 
 
